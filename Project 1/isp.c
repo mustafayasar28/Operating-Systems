@@ -14,227 +14,328 @@
 #define READ 0
 #define WRITE 1
 
-static char *duplicateStr( char* str ) {
-     char* otherStr = malloc( strlen(str) + 1 );
-     if ( otherStr != NULL ) {
-         strcpy(otherStr, str);
-     }
-     return otherStr;
+static char* duplicateStr(char* str) {
+	char* otherStr = malloc(strlen(str) + 1);
+	if (otherStr != NULL) {
+		strcpy(otherStr, str);
+	}
+	return otherStr;
 }
 
-int main(int argc, char *argv[])
+int main(int argc, char* argv[])
 {
-     /* byteCount is the number of bytes to read/write in one system
+	/* byteCount is the number of bytes to read/write in one system
 call */
 
-     const int byteCount = atoi(argv[1]);
+	const int byteCount = atoi(argv[1]);
 
-     /*
-         If mode == 1, normal communication mode is used
-         IF mode == 2, tapped communication mode is used
-     */
+	/*
+		If mode == 1, normal communication mode is used
+		IF mode == 2, tapped communication mode is used
+	*/
 
-     const int mode = atoi(argv[2]);
-
-
-     pid_t parentId = getpid();
-
-     while ( getpid() == parentId ) {
-         char *paramv[200];
-         int paramc = 0;
-         /* Get the command input from the user*/
-         char str[MAX_COMMAND_SIZE];
+	const int mode = atoi(argv[2]);
 
 
-         printf("isp$ ");
-         fgets(str, MAX_COMMAND_SIZE, stdin);
+	pid_t parentId = getpid();
 
-         if ( (strlen(str) > 0) && (str[ strlen(str) - 1] == '\n') ) {
-             str[ strlen(str) - 1] = '\0';
-         }
-
-         /* str is the command to be executed. */
-
-         /* divide the command into parameters. */
-         char* params = strtok(str, " ");
-         while ( params != NULL ) {
-             paramv[ paramc++ ] = duplicateStr(params);
-             params = strtok(NULL, " ");
-         }
-
-         paramv[paramc] = NULL;
-
-         /* Every parameter can be accessed by params[i], where
-             min i = 0, max i = paramc
-
-             I.e. number of parameters is counter.
-
-             paramv[0] = command name
-             paramv[1] = first parameter (if any)
-             paramv[2] = second parameter (if any)
-             ...
-             paramv[ paramc ] = NULL;
-         */
+	while (getpid() == parentId) {
+		char* paramv[200];
+		int paramc = 0;
+		/* Get the command input from the user*/
+		char str[MAX_COMMAND_SIZE];
 
 
-         /* Create the child process. The command will be executed
-             by this child process.
-         */
+		printf("isp$ ");
+		fgets(str, MAX_COMMAND_SIZE, stdin);
 
-         /* Check if the parameters contain | character */
-         /* Search paramv until paramc */
-         char* search = "|";
-         bool found = false;
-         int i = 0;
-         while( paramv[i] ) {
-             if (strcmp(paramv[i], search) == 0) {
-                 found = true;
-                 break;
-             }
-             i++;
-         }
+		if ((strlen(str) > 0) && (str[strlen(str) - 1] == '\n')) {
+			str[strlen(str) - 1] = '\0';
+		}
 
-         /* found = true only if the parameters contain | */
-         /* found = false, otherwise */
+		/* str is the command to be executed. */
 
+		/* divide the command into parameters. */
+		char* params = strtok(str, " ");
+		while (params != NULL) {
+			paramv[paramc++] = duplicateStr(params);
+			params = strtok(NULL, " ");
+		}
 
-         /* If !found, create one child,
-             else, create two child.
-         */
+		paramv[paramc] = NULL;
 
-         if ( !found ) {
-             pid_t pid;
+		/* Every parameter can be accessed by params[i], where
+			min i = 0, max i = paramc
 
-             pid = fork();    /* for the child process */
+			I.e. number of parameters is counter.
 
-             if ( pid < 0 ) {
-                 fprintf(stderr, "Fork failed");
-                 return 1;
-             } else if ( pid == 0 ) {    /* child process executes here */
-                 char path[] = "/bin/";
-                 strcat(path, paramv[0]);
-                 int validation = execv(path, paramv);
-
-                 if ( validation == -1 ) {
-                     fprintf(stderr, "Invalid input\n");
-                 }
-
-                 for (int i = 0; i < paramc; i++){
-                     free( paramv[paramc] );
-                 }
-             } else {    /* parent process executes here */
-                 wait(NULL); /* Wait for the child process to complete */
-             }
-         } else {
-             pid_t leftChild = 1;
-             pid_t rightChild = 1;
-             pid_t wpid;
-             int status = 0;
-             
-             if (mode == 1) { /* We are in the normal mode */ 
-				 	/* Create the pipe here */
-				 int fd[2]; /* File Descriptors, fd[READ] for read, fd[WRITE] for write */
-				 
-				 pipe(fd); /* Pipe is created */
+			paramv[0] = command name
+			paramv[1] = first parameter (if any)
+			paramv[2] = second parameter (if any)
+			...
+			paramv[ paramc ] = NULL;
+		*/
 
 
-				 leftChild = fork();
+		/* Create the child process. The command will be executed
+			by this child process.
+		*/
 
-				 if ( leftChild != 0 ) {
-				     rightChild = fork();
-				 }
-				 
-				 if ( leftChild == 0 && rightChild != 0 ) { /* Left Child executes here */
-		             char* search = "|";
-		             int i = 0;
-		             int index;
-		             while( paramv[i] ) {
-		                 if (strcmp(paramv[i], search) == 0) {
-		                     index = i;
-		                     break;
-		                 }
-		                 i++;
-		             }
+		/* Check if the parameters contain | character */
+		/* Search paramv until paramc */
+		char* search = "|";
+		bool found = false;
+		int i = 0;
+		while (paramv[i]) {
+			if (strcmp(paramv[i], search) == 0) {
+				found = true;
+				break;
+			}
+			i++;
+		}
 
-		             char* newParams[ 10 ];
+		/* found = true only if the parameters contain | */
+		/* found = false, otherwise */
 
-		             for (int i = 0; i < index; i++) {
-		                 newParams[i] = duplicateStr(paramv[i]);
-		             }
 
-		             newParams[index] = NULL;
+		/* If !found, create one child,
+			else, create two child.
+		*/
 
-		             char path[] = "/bin/";
-		             strcat(path, paramv[0]);
+		if (!found) {
+			pid_t pid;
 
-		             dup2(fd[WRITE], WRITE); /* Duplicate the write end */
+			pid = fork();    /* for the child process */
 
-		             close(fd[READ]); /* Close the unused read end */
-		             
-		             close(fd[WRITE]); /* Close file descriptor since it is a copy */
+			if (pid < 0) {
+				fprintf(stderr, "Fork failed");
+				return 1;
+			}
+			else if (pid == 0) {    /* child process executes here */
+				char path[] = "/bin/";
+				strcat(path, paramv[0]);
+				int validation = execv(path, paramv);
 
-		             execv(path, newParams);
+				if (validation == -1) {
+					fprintf(stderr, "Invalid input\n");
+				}
 
-		             return -1;
-             	}
-             	
-             	if ( leftChild != 0 && rightChild == 0 ) { /* Right Child executes here */
+				for (int i = 0; i < paramc; i++) {
+					free(paramv[paramc]);
+				}
+			}
+			else {    /* parent process executes here */
+				wait(NULL); /* Wait for the child process to complete */
+			}
+		}
+		else {
+			pid_t leftChild = 1;
+			pid_t rightChild = 1;
+			pid_t wpid;
+			int status = 0;
 
-		             /* Find index of '|' and create new array containing elements after '|' */
-		             char* search = "|";
-		             int i = 0;
-		             int index;
-		             while( paramv[i] ) {
-		                 if (strcmp(paramv[i], search) == 0) {
-		                     index = i;
-		                     break;
-		                 }
-		                 i++;
-		             }
+			if (mode == 1) { /* We are in the normal mode */
+				   /* Create the pipe here */
+				int fd[2]; /* File Descriptors, fd[READ] for read, fd[WRITE] for write */
 
-		             char* newParams[ 10 ];
-		             for ( int i = 0; i < paramc - index - 1; i++ ) {
-		                 newParams[i] = duplicateStr( paramv[index + 1 + i]);
-		             }
+				pipe(fd); /* Pipe is created */
 
-		             newParams[ paramc - index - 1] = NULL;
 
-		             char path[] = "/bin/";
-		             strcat(path, newParams[0]);
+				leftChild = fork();
 
-		             dup2(fd[READ], READ);
-		             close(fd[WRITE]);
-		             close(fd[READ]);
+				if (leftChild != 0) {
+					rightChild = fork();
+				}
 
-		             execv(path, newParams);
-		             return -1;
-		         }
-		         
-		         close(fd[READ]);
-             	 close(fd[WRITE]);
+				if (leftChild == 0 && rightChild != 0) { /* Left Child executes here */
+					char* search = "|";
+					int i = 0;
+					int index;
+					while (paramv[i]) {
+						if (strcmp(paramv[i], search) == 0) {
+							index = i;
+							break;
+						}
+						i++;
+					}
 
-             	 while((wpid = wait(&status)) > 0); /* Parent waits here for all its children to terminate */
-             } else if ( mode == 2 ) {
-             
-             	leftChild = fork();
+					char* newParams[10];
 
-				 if ( leftChild != 0 ) {
-				     rightChild = fork();
-				 }
-				 
-				 if ( leftChild == 0 && rightChild != 0 ) { /* Left Child executes here */
-		             
-		             return -1;
-             	}
-             	
-             	if ( leftChild != 0 && rightChild == 0 ) { /* Right Child executes here */
+					for (int i = 0; i < index; i++) {
+						newParams[i] = duplicateStr(paramv[i]);
+					}
 
-		             return -1;
-		        }
-             }
-         }
-         for ( int i = 0; i < paramc; i++ )
-             free(paramv[ i ]);
-     }
-     return 0;
+					newParams[index] = NULL;
+
+					char path[] = "/bin/";
+					strcat(path, paramv[0]);
+
+					dup2(fd[WRITE], WRITE); /* Duplicate the write end */
+
+					close(fd[READ]); /* Close the unused read end */
+
+					execv(path, newParams);
+
+					return -1;
+				}
+
+				if (leftChild != 0 && rightChild == 0) { /* Right Child executes here */
+
+					 /* Find index of '|' and create new array containing elements after '|' */
+					char* search = "|";
+					int i = 0;
+					int index;
+					while (paramv[i]) {
+						if (strcmp(paramv[i], search) == 0) {
+							index = i;
+							break;
+						}
+						i++;
+					}
+
+					char* newParams[10];
+					for (int i = 0; i < paramc - index - 1; i++) {
+						newParams[i] = duplicateStr(paramv[index + 1 + i]);
+					}
+
+					newParams[paramc - index - 1] = NULL;
+
+					char path[] = "/bin/";
+					strcat(path, newParams[0]);
+
+					dup2(fd[READ], READ);
+					close(fd[WRITE]);
+					close(fd[READ]);
+
+					execv(path, newParams);
+					return -1;
+				}
+
+				close(fd[READ]);
+				close(fd[WRITE]);
+
+				while ((wpid = wait(&status)) > 0); /* Parent waits here for all its children to terminate */
+
+
+			}
+			else if (mode == 2) {
+				int leftPipe[2];
+				int rightPipe[2];
+				pid_t wpid;
+				int status = 0;
+
+				pipe(leftPipe); /* Output of leftChild will go to this pipe */
+				pipe(rightPipe); /* Input of rightChild will be taken from this pipe */
+
+				leftChild = fork();
+
+				if (leftChild != 00 && rightChild != 0) {
+					/* Only the main (parent) process executes here */
+
+					/* First read the output that was written by the left Child from the leftPipe */
+
+					close(leftPipe[WRITE]); /* Main process does not write to the leftPipe */
+
+					char reading_buf[byteCount];
+
+					/* Read and re-direct the input */
+
+					while (read(leftPipe[READ], reading_buf, byteCount) > 0) {
+						write(rightPipe[WRITE], reading_buf, byteCount);
+					}
+
+					close(rightPipe[WRITE]); /* Writing finished, close it so that the right child can read.*/
+				}
+
+				if (leftChild != 0) {
+					rightChild = fork();
+				}
+
+				if (leftChild == 0 && rightChild != 0) { /* Left Child executes here */
+					char* search = "|";
+					int i = 0;
+					int index;
+					while (paramv[i]) {
+						if (strcmp(paramv[i], search) == 0) {
+							index = i;
+							break;
+						}
+						i++;
+					}
+
+					char* newParams[10];
+
+					for (int i = 0; i < index; i++) {
+						newParams[i] = duplicateStr(paramv[i]);
+					}
+
+					newParams[index] = NULL;
+					char path[] = "/bin/";
+					strcat(path, paramv[0]);
+
+
+					/* Execute the first part of the command, and sent the
+						output to the main process via leftPipe
+					*/
+
+
+					/* Duplicate leftPipe to the terminal. Any writes to standart output
+						will in fact to be sent to the leftPipe.
+
+						WHenever left child (this process) writes data to standart output,
+						the data will go to the leftPipe through the write-end descriptor.
+
+					*/
+					dup2(leftPipe[WRITE], WRITE);
+					close(leftPipe[READ]); /* Close the read end */
+					execv(path, newParams); /* Execute the command */
+
+					return -1;
+				}
+
+				if (leftChild != 0 && rightChild == 0) { /* Right Child executes here */
+
+					 /* Find index of '|' and create new array containing elements after '|' */
+					char* search = "|";
+					int i = 0;
+					int index;
+					while (paramv[i]) {
+						if (strcmp(paramv[i], search) == 0) {
+							index = i;
+							break;
+						}
+						i++;
+					}
+
+					char* newParams[10];
+					for (int i = 0; i < paramc - index - 1; i++) {
+						newParams[i] = duplicateStr(paramv[index + 1 + i]);
+					}
+
+					newParams[paramc - index - 1] = NULL;
+
+					char path[] = "/bin/";
+					strcat(path, newParams[0]);
+
+					dup2(rightPipe[READ], READ);
+					close(rightPipe[WRITE]); /* Right child does not write to the rightPipe */
+					execv(path, newParams); /* Execute the command */
+
+					return -1;
+				}
+				close(leftPipe[READ]);
+				close(leftPipe[WRITE]);
+
+				close(rightPipe[READ]);
+				close(rightPipe[WRITE]);
+
+				while ((wpid = wait(&status)) > 0); /* Parent waits here for all its children to terminate */
+			}
+		}
+		for (int i = 0; i < paramc; i++)
+			free(paramv[i]);
+
+		printf("\n");
+	}
+	return 0;
 }
