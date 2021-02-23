@@ -67,7 +67,7 @@ call */
 
         paramv[paramc] = NULL;
 
-        /* Every parameter can be accessed by params[i], where
+        /* Every parameter can be accessed by paramv[i], where
             min i = 0, max i = paramc
 
             I.e. number of parameters is counter.
