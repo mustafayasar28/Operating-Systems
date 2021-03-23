@@ -1,0 +1,294 @@
+
+/* Mustafa Yasar CS-342 Operating Systems Project 2 */
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <pthread.h>
+#include <math.h>
+
+double My_random(unsigned seed);
+
+/* The node that the threads will add to the runqueue */
+struct runqueue_elem {
+	struct runqueue_elem *next;
+	/* data here */
+	int thread_index;
+	int burst_index;
+	int length;	/* in ms */
+	/* wall clock time */
+};
+
+/* The queue (linked list) that the threads will add the runqueue_elems into */
+struct runqueue {
+	struct runqueue_elem *head;
+	struct runqueue_elem *tail;
+	int count; /* Number of runqueue elements in the queue */
+};
+
+/* Constructor of the runqueue */
+void runqueue_init(struct runqueue *rq) {
+	rq->count = 0;
+	rq->head = NULL;
+	rq->tail = NULL;
+}
+
+/* Runqueue insertion, adds the element to the tail of the queue */
+void runqueue_insert(struct runqueue *q, struct runqueue_elem *qe) {
+	if (q -> count == 0) {
+		q->head = qe;
+		q->tail = qe;
+	} else {
+		q->tail->next = qe;
+		q->tail = qe;
+	}
+	
+	q->count++;
+}
+
+/* Delete the node from queue */
+void runqueue_remove(struct runqueue *rq, int thread_index) {
+	
+}
+
+/* Runqueue retrieval, retrieves the head node and deletes it from the queue */
+struct runqueue_elem * runqueue_retrieve(struct runqueue *rq) {
+	struct runqueue_elem *qe;
+	
+	if ( rq->count == 0 ) return NULL;
+	
+	qe = rq->head;
+	
+	rq->head = rq->head->next;
+	rq->count--;
+	
+	return qe;
+}
+
+/* The object that is shared by the threads */
+struct shared_buffer {
+	struct runqueue *rq; 
+	pthread_mutex_t mutex_queue;	/* mutex to ensure synchronization among threads */
+	pthread_cond_t	cond_hasspace;	/* will cause the W Threads to wait */
+	pthread_cond_t	cond_hasburst;	/* will cause the S Thread to wait */
+};
+
+struct shared_buffer *buf;
+
+void shared_buffer_add(struct shared_buffer *sbp) {
+	
+}
+
+struct thread_args {
+	int i;		/* Thread index */
+	int avgB;
+	int avgA;
+	int Bcount;
+	int minA;
+	int minB;
+};
+
+static void * generate_burst(void * _arg) {
+	/* Generate a sequence of cpu bursts one by by 
+		and add them to rq.
+		
+		Length of each burst is random. 
+		
+		avgA >= 100 and avgB >= 100
+		
+		f(x) = lambda * exp(-lambda * x).
+
+		Here, the lambda is the rate parameter. It is 1/avgA (for interarrival times). 			
+		It is 1/avgB (for burst times)
+		
+		We will generate a random number between 0 and 1 UNTIL the generated 
+		random number is greater than minA / 1000 (For inter-arrival time and sleeping time)
+		
+		We will generate a random number between 0 and 1 UNTIL the generated 
+		random number is greater than minB / 1000 (For Burst time)
+		
+	*/
+	
+	struct thread_args *th_args = (struct thread_args *) _arg;
+	
+	int index = th_args -> i + 1;
+	int avgB = th_args -> avgB;
+	int avgA = th_args -> avgA;
+	int Bcount = th_args -> Bcount;
+	int minA = th_args -> minA;
+	int minB = th_args -> minB;
+	
+	
+	double lambda = (double) 1 / (double) avgA;
+	double rand_num = (double) My_random(0) / (double) RAND_MAX;
+	//double rand_num = (double) rand() / (double) RAND_MAX;
+	double arrival_sleep_time = -1/lambda * log(1 - rand_num);
+	
+	while (arrival_sleep_time < minA) {
+		rand_num = (double) rand() / (double) RAND_MAX;
+		arrival_sleep_time = (double) -1/lambda * log(1 - rand_num);
+	}
+	
+	/* arrival_sleep_time is in ms */
+	
+	printf("Thread index:%d, sleeping for %f milliseconds\n", index, arrival_sleep_time);
+	usleep( arrival_sleep_time * 1000 );
+	printf("Thread index:%d, woke up\n", index);
+
+	pthread_exit(NULL);
+}
+
+
+static void * s_thread_func(void * arg) {
+
+}
+
+
+
+
+int main(int argc, char* argv[]) {
+	
+	if ( argc != 8 && argc != 5 ) {
+		printf("usage: schedule <N><Bcount><minB><avgB><minA><avgA><ALG>\n");
+		printf("or\n");
+		printf("usage: schedule <N><ALG> -f <inprefix>-i.txt\n");
+		exit(1);
+	}
+	
+	int N = atoi(argv[1]);
+	/*
+	if (!(N >= 1 && N <= 10)) {
+		printf("N must be between 1 and 10\n");
+		exit(1);
+	}
+	
+	
+	
+	
+	if ( minB < 100 ) {
+		printf("minB can not be smaller than 100ms\n");
+		exit(1);
+	}
+	
+
+	
+	
+	if ( minA < 100 ) {
+		printf("minA can not be smaller than 100ms\n");
+		exit(1);
+	}
+	
+
+	char ALG[10];
+	
+	strcpy(ALG, argv[7]);
+	*/
+	
+	/* TODO: Add input validation to algorithm */
+		int avgA = atoi(argv[6]);
+		int avgB = atoi(argv[4]);
+		int Bcount = atoi(argv[2]);
+		int minB = atoi(argv[3]);
+		int minA = atoi(argv[5]);
+		
+	/* Construct the buffer and runqueue */
+	buf = (struct shared_buffer *) malloc(sizeof(struct shared_buffer));
+	buf -> rq = (struct runqueue *) malloc(sizeof(struct runqueue));
+	
+	/* Initializations */
+	runqueue_init(buf -> rq);
+	pthread_mutex_init(&buf -> mutex_queue, NULL);
+	pthread_cond_init(&buf -> cond_hasspace, NULL);
+	pthread_cond_init(&buf -> cond_hasburst, NULL);
+	
+		
+	pthread_t w_thread_pids[N];
+	pthread_t s_thread_id;
+	int ret;
+	int i;
+
+	struct thread_args *th_args = calloc( sizeof(struct thread_args), 1);
+	
+	/* Create the W threads */
+	for (i = 0; i < N; ++i) {
+		printf("Creating W_thread_%d.\n", i + 1);
+		
+		/* Adjust thread parameters */
+		
+		th_args -> avgB = avgB;
+		th_args -> avgA = avgA; 
+		th_args -> Bcount = Bcount;
+		th_args -> i = i;
+		th_args -> minA = minA;
+		th_args -> minB = minB;
+		
+		ret = pthread_create(&w_thread_pids[i], NULL, generate_burst, th_args);
+		
+		if (ret < 0) {
+			perror("thread could not be created\n");
+			exit(1);
+		}
+	}
+	
+	printf("Creating S_thread.\n");
+	ret = pthread_create(&s_thread_id, NULL, s_thread_func, (void *) NULL);
+	if (ret < 0) {
+		perror("s_thread could not be created\n");
+		exit(1);
+	}
+	
+	/* Wait for the W_threads to terminate */
+	for (i = 0; i < N; ++i)  {
+		pthread_join(w_thread_pids[i], NULL);
+	}
+	
+	pthread_join(s_thread_id, NULL);
+	
+	/* Wait for the S_thread to terminate */
+	free(th_args);
+	free(buf -> rq);
+	free(buf);
+	return 0;
+}
+
+
+double My_random(unsigned seed) {
+	static unsigned z;
+	unsigned long tmp;
+	
+	if (seed != 0) z = seed;
+	
+	tmp = z * 279470273;
+	z = tmp % 4294967291U;
+	return z;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
