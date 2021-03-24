@@ -9,6 +9,7 @@
 #include <sys/wait.h>
 #include <pthread.h>
 #include <math.h>
+#include <stdbool.h>
 
 double My_random(unsigned seed);
 
@@ -16,9 +17,10 @@ double My_random(unsigned seed);
 struct runqueue_elem {
 	struct runqueue_elem *next;
 	/* data here */
+	bool done;
 	int thread_index;
-	int burst_index;
-	int length;	/* in ms */
+	//int burst_index;
+	double length;	/* in ms */
 	/* wall clock time */
 };
 
@@ -50,8 +52,8 @@ void runqueue_insert(struct runqueue *q, struct runqueue_elem *qe) {
 }
 
 /* Delete the node from queue */
-void runqueue_remove(struct runqueue *rq, int thread_index) {
-
+void runqueue_remove(struct runqueue *rq, struct runqueue_elem *qe) {
+    // TODO
 }
 
 /* Runqueue retrieval, retrieves the head node and deletes it from the queue */
@@ -72,14 +74,27 @@ struct runqueue_elem * runqueue_retrieve(struct runqueue *rq) {
 struct shared_buffer {
 	struct runqueue *rq;
 	pthread_mutex_t mutex_queue;	/* mutex to ensure synchronization among threads */
-	pthread_cond_t	cond_hasspace;	/* will cause the W Threads to wait */
 	pthread_cond_t	cond_hasburst;	/* will cause the S Thread to wait */
 };
 
 struct shared_buffer *buf;
+char algorithm[15];
+int total_burst_count;
 
-void shared_buffer_add(struct shared_buffer *sbp) {
+void shared_buffer_add(struct shared_buffer *sbp, struct runqueue_elem *elem) {
+    pthread_mutex_lock( &(sbp -> mutex_queue) );
 
+    /* Critical section, put the burst into the queue */
+    printf("Thread index:%d is in critical section\n", elem->thread_index);
+
+    runqueue_insert(sbp->rq, elem);
+
+    if (sbp->rq->count > 0) {
+        pthread_cond_signal(&(sbp->cond_hasburst));
+    }
+
+    printf("Thread index:%d EXITTED the critical section\n", elem->thread_index);
+    pthread_mutex_unlock( &(sbp->mutex_queue) );
 }
 
 struct thread_args {
@@ -89,6 +104,10 @@ struct thread_args {
 	int Bcount;
 	int minA;
 	int minB;
+};
+
+struct s_thread_args {
+    char alg[15];
 };
 
 static void * generate_burst(void * _arg) {
@@ -150,20 +169,80 @@ static void * generate_burst(void * _arg) {
 
         printf("Thread index:%d, has created burst #%d, it is length of %f\n", index, i + 1, burst_length);
 
+        struct runqueue_elem *burst;
+        /*	buf = (struct shared_buffer *) malloc(sizeof(struct shared_buffer));*/
+        burst = (struct runqueue_elem *) malloc(sizeof(struct runqueue_elem));
 
+        burst->thread_index = index;
+        burst->length = burst_length;
+        burst->next = NULL;
+        burst->done = false;
 
+        /* Try adding the burst into the runqueue */
+        shared_buffer_add(buf, burst);
+
+        /* */
+        printf("Thread index:%d, has added burst #%d, length=%f\n", index, i + 1, burst->length);
+
+        /* Sleep again before creating the other burst */
+        double after_burst = (double) 1 / (double) avgA;
+        double after_burst_rand_num = (double) rand() / (double) RAND_MAX;
+        double after_burst_sleeping_time = (double) -1 / after_burst * log(1 - after_burst_rand_num);
+
+        while(after_burst_sleeping_time < minA) {
+            after_burst_rand_num = (double) rand() / (double) RAND_MAX;
+            after_burst_sleeping_time = (double) -1 / after_burst * log(1 - after_burst_rand_num);
+        }
+
+        printf("Thread index:%d, has added, sleeping before creating burst again for: %f ms\n", index, after_burst_sleeping_time);
+        usleep(after_burst_sleeping_time * 1000);
     }
 
+	free(th_args);
 	pthread_exit(NULL);
 }
 
 
 static void * s_thread_func(void * arg) {
+    printf("S-THREAD Created.\n");
 
+    pthread_mutex_lock(&(buf->mutex_queue));
+    printf("S Thread is waiting for an item to be added to the runqueue\n");
+    while ( buf->rq->count == 0 ) {
+        pthread_cond_wait( &(buf -> cond_hasburst), &(buf->mutex_queue) );
+    } /* S Thread sleeps as long as the runqueue is empty */
+
+    pthread_mutex_unlock(&(buf->mutex_queue));
+    printf("An item is added to the runqueue, S Thread is awaken\n");
+
+    int executed_burst_count = 0;
+
+    if (strcmp(algorithm, "FCFS") == 0) {
+        do {
+            pthread_mutex_lock(&(buf->mutex_queue));
+            while (buf -> rq -> count == 0 ) {
+                pthread_cond_wait( &(buf -> cond_hasburst), &(buf -> mutex_queue));
+            }
+
+            struct runqueue_elem *elem = runqueue_retrieve(buf -> rq);
+
+            pthread_mutex_unlock(&(buf->mutex_queue));
+
+            printf("S Thread is executing the burst of thread #%d. It will sleep for %f ms\n", elem->thread_index, elem->length);
+
+            usleep( elem -> length * 1000);
+
+            printf("S Thread has executed the burst of thread #%d.\n", elem -> thread_index);
+
+            executed_burst_count++;
+            free(elem);
+        } while(executed_burst_count < total_burst_count );
+    } else if (strcmp(algorithm, "SJF") == 0) {
+
+
+    }
+    pthread_exit(NULL);
 }
-
-
-
 
 int main(int argc, char* argv[]) {
 
@@ -201,6 +280,10 @@ int main(int argc, char* argv[]) {
 	char ALG[10];
 
 	strcpy(ALG, argv[7]);
+
+	The <ALG> parameter specifies the scheduling algorithm to use. It
+can be one of: “FCFS”, “SJF”, “PRIO”, “VRUNTIME”. All simulated scheduling
+algorithms are non-preemptive.
 	*/
 
 	/* TODO: Add input validation to algorithm */
@@ -209,6 +292,18 @@ int main(int argc, char* argv[]) {
 		int Bcount = atoi(argv[2]);
 		int minB = atoi(argv[3]);
 		int minA = atoi(argv[5]);
+        strcpy(algorithm, argv[7]);
+        total_burst_count = N * Bcount;
+
+        if (    (strcmp(algorithm, "PRIO") != 0) &&
+                (strcmp(algorithm, "FCFS") != 0) &&
+                (strcmp(algorithm, "SJF") != 0)  &&
+                (strcmp(algorithm, "VRUNTIME") != 0) )
+        {
+            printf("Algorithm must be one of the 'PRIO', 'FCFS', 'SJF', 'VRUNTIME' ");
+            exit(1);
+        }
+
 
 	/* Construct the buffer and runqueue */
 	buf = (struct shared_buffer *) malloc(sizeof(struct shared_buffer));
@@ -217,15 +312,20 @@ int main(int argc, char* argv[]) {
 	/* Initializations */
 	runqueue_init(buf -> rq);
 	pthread_mutex_init(&buf -> mutex_queue, NULL);
-	pthread_cond_init(&buf -> cond_hasspace, NULL);
 	pthread_cond_init(&buf -> cond_hasburst, NULL);
-
 
 	pthread_t w_thread_pids[N];
 	pthread_t s_thread_id;
 	int ret;
 	int i;
 
+
+    printf("Creating S_thread.\n");
+	ret = pthread_create(&s_thread_id, NULL, s_thread_func, (void *) NULL);
+	if (ret < 0) {
+		perror("s_thread could not be created\n");
+		exit(1);
+	}
 
 	/* Create the W threads */
 	for (i = 0; i < N; ++i) {
@@ -249,21 +349,25 @@ int main(int argc, char* argv[]) {
 		}
 	}
 
-	printf("Creating S_thread.\n");
-	ret = pthread_create(&s_thread_id, NULL, s_thread_func, (void *) NULL);
-	if (ret < 0) {
-		perror("s_thread could not be created\n");
-		exit(1);
-	}
+
 
 	/* Wait for the W_threads to terminate */
 	for (i = 0; i < N; ++i)  {
 		pthread_join(w_thread_pids[i], NULL);
 	}
 
-	pthread_join(s_thread_id, NULL);
+	pthread_join(s_thread_id, NULL);	/* Wait for the S_thread to terminate */
 
-	/* Wait for the S_thread to terminate */
+
+
+	printf("\n\nProgram Finished. Runqueue information \n\n");
+
+	while( buf->rq->count != 0 ) {
+        printf("Queue element %d, length=%f, thread_index=%d \n", i, buf->rq->head->length, buf->rq->head->thread_index);
+        struct runqueue_elem *elem = runqueue_retrieve(buf->rq);
+        free(elem);
+	}
+
 	free(buf -> rq);
 	free(buf);
 	return 0;
@@ -280,7 +384,6 @@ double My_random(unsigned seed) {
 	z = tmp % 4294967291U;
 	return z;
 }
-
 
 
 
