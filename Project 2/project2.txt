@@ -19,7 +19,7 @@ struct runqueue_elem {
 	/* data here */
 	bool done;
 	int thread_index;
-	//int burst_index;
+	int burst_index;
 	double length;	/* in ms */
 	/* wall clock time */
 };
@@ -51,9 +51,42 @@ void runqueue_insert(struct runqueue *q, struct runqueue_elem *qe) {
 	q->count++;
 }
 
-/* Delete the node from queue */
+/* Delete a specific burst node from the runqueue */
 void runqueue_remove(struct runqueue *rq, struct runqueue_elem *qe) {
-    // TODO
+    if ( rq->count == 0 ) return;
+
+    if ( rq->count == 1 ) {
+        rq -> head = NULL;
+        rq -> tail = NULL;
+        rq -> count--;
+        free(qe);
+        return;
+    }
+
+    if ( qe == rq -> head ) {
+        rq -> head = qe -> next;
+        free(qe);
+        rq -> count--;
+        return;
+    }
+
+    struct runqueue_elem *previous = rq -> head;
+
+    while ( previous -> next != qe ) {
+        previous = previous -> next;
+    }
+
+    if ( qe == rq -> tail ) {
+        rq -> tail = previous;
+        rq -> tail -> next = NULL;
+        rq -> count--;
+        free(qe);
+        return;
+    }
+
+    previous -> next = qe -> next;
+    free(qe);
+    rq -> count--;
 }
 
 /* Runqueue retrieval, retrieves the head node and deletes it from the queue */
@@ -80,6 +113,7 @@ struct shared_buffer {
 struct shared_buffer *buf;
 char algorithm[15];
 int total_burst_count;
+int Bcount;
 
 void shared_buffer_add(struct shared_buffer *sbp, struct runqueue_elem *elem) {
     pthread_mutex_lock( &(sbp -> mutex_queue) );
@@ -151,29 +185,25 @@ static void * generate_burst(void * _arg) {
 	}
 
 	/* arrival_sleep_time is in ms */
-	printf("Thread index:%d, sleeping for %f milliseconds\n", index, arrival_sleep_time);
 	usleep( arrival_sleep_time * 1000 ); /* Convert mikroseconds to milliseconds */
-	printf("Thread index:%d, woke up\n", index);
 
 
     for (int i = 0; i < Bcount; i++) {
         double b_lambda = (double) 1 / (double) avgB;
         double b_rand_num = (double) rand() / (double) RAND_MAX;
         double burst_length = (double) -1/b_lambda * log(1 - b_rand_num);
-        printf("Thread index:%d, is creating burst #%d\n", index, i + 1);
 
         while (burst_length < minB) {
             b_rand_num = (double) rand() / (double) RAND_MAX;
             burst_length = (double) -1/b_lambda * log(1 - b_rand_num);
         }
 
-        printf("Thread index:%d, has created burst #%d, it is length of %f\n", index, i + 1, burst_length);
-
         struct runqueue_elem *burst;
         /*	buf = (struct shared_buffer *) malloc(sizeof(struct shared_buffer));*/
         burst = (struct runqueue_elem *) malloc(sizeof(struct runqueue_elem));
 
         burst->thread_index = index;
+        burst->burst_index = i + 1;
         burst->length = burst_length;
         burst->next = NULL;
         burst->done = false;
@@ -194,7 +224,6 @@ static void * generate_burst(void * _arg) {
             after_burst_sleeping_time = (double) -1 / after_burst * log(1 - after_burst_rand_num);
         }
 
-        printf("Thread index:%d, has added, sleeping before creating burst again for: %f ms\n", index, after_burst_sleeping_time);
         usleep(after_burst_sleeping_time * 1000);
     }
 
@@ -239,7 +268,58 @@ static void * s_thread_func(void * arg) {
         } while(executed_burst_count < total_burst_count );
     } else if (strcmp(algorithm, "SJF") == 0) {
 
+        /* First, determine which burst has the smallest burst length, */
+        /* Select the burst having shortest burst_length whose burst_index is i
+            i will be 1...Bcount
+        */
 
+        struct runqueue_elem *copy;
+        struct runqueue_elem *next_burst;
+
+        int i = 1;
+
+        while(true) {
+            /* Lock the queue, so that while searching for a burst to execute,
+            there will be no adding to the queue. */
+
+            pthread_mutex_lock(&(buf->mutex_queue));
+            while(buf -> rq -> count == 0) {
+                pthread_cond_wait(&(buf->cond_hasburst), &(buf->mutex_queue));
+            }
+
+            copy = buf -> rq -> head;
+            next_burst = copy;
+            double shortest = copy -> length;
+
+            while( copy != NULL ) {
+                if ( (copy -> thread_index != next_burst -> thread_index) ) {
+                    if ((copy -> length < shortest)) {
+                        next_burst = copy;
+                        shortest = next_burst -> length;
+                    }
+                }
+                copy = copy -> next;
+            }
+
+            printf("\nNext burst info: thid: %d, bid: %d\n", next_burst ->thread_index, next_burst->burst_index);
+
+            pthread_mutex_unlock(&(buf -> mutex_queue));
+
+            /* Burst having shortest length has been found found, executing. */
+            printf("S Thread is executing Thread index:%d , Burst index:%d, Length:%f\n", next_burst->thread_index,
+                                    next_burst->burst_index, next_burst->length);
+
+            usleep( next_burst -> length * 1000);
+
+            printf("S Thread has executed Thread index:%d , Burst index:%d, Length:%f\n", next_burst->thread_index,
+                                    next_burst->burst_index, next_burst->length);
+
+
+            runqueue_remove(buf -> rq, next_burst);
+            executed_burst_count++;
+            if ( executed_burst_count == total_burst_count ) break;
+            if ( executed_burst_count == Bcount ) i++;
+        }
     }
     pthread_exit(NULL);
 }
@@ -289,10 +369,10 @@ algorithms are non-preemptive.
 	/* TODO: Add input validation to algorithm */
 		int avgA = atoi(argv[6]);
 		int avgB = atoi(argv[4]);
-		int Bcount = atoi(argv[2]);
 		int minB = atoi(argv[3]);
 		int minA = atoi(argv[5]);
         strcpy(algorithm, argv[7]);
+		Bcount = atoi(argv[2]);
         total_burst_count = N * Bcount;
 
         if (    (strcmp(algorithm, "PRIO") != 0) &&
@@ -362,7 +442,7 @@ algorithms are non-preemptive.
 
 	printf("\n\nProgram Finished. Runqueue information \n\n");
 
-	while( buf->rq->count != 0 ) {
+	while( buf->rq->count > 0 ) {
         printf("Queue element %d, length=%f, thread_index=%d \n", i, buf->rq->head->length, buf->rq->head->thread_index);
         struct runqueue_elem *elem = runqueue_retrieve(buf->rq);
         free(elem);
@@ -370,6 +450,7 @@ algorithms are non-preemptive.
 
 	free(buf -> rq);
 	free(buf);
+
 	return 0;
 }
 
