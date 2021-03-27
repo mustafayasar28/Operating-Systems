@@ -17,11 +17,11 @@ double My_random(unsigned seed);
 /* The node that the threads will add to the runqueue */
 struct runqueue_elem {
 	struct runqueue_elem *next;
-	/* data here */
 	int thread_index;
 	int burst_index;
 	double length;	/* in ms */
-	/* wall clock time */
+	long int arrival_time;
+	long int exe_start_time;
 };
 
 /* The queue (linked list) that the threads will add the runqueue_elems into */
@@ -119,12 +119,20 @@ double vruntime_info[10];
 int mode;
 char file_name[20];
 struct timeval start;
+struct runqueue *waiting_times;
 
 void shared_buffer_add(struct shared_buffer *sbp, struct runqueue_elem *elem) {
     pthread_mutex_lock( &(sbp -> mutex_queue) );
 
     /* Critical section, put the burst into the queue */
     printf("Thread index:%d is in critical section\n", elem->thread_index);
+
+    struct timeval end;
+    gettimeofday(&end, NULL);
+    long seconds = (end.tv_sec - start.tv_sec);
+    long micros = ((seconds * 1000000) + end.tv_usec) - (start.tv_usec);
+
+    elem->arrival_time = micros / 1000;
 
     runqueue_insert(sbp->rq, elem);
 
@@ -149,7 +157,7 @@ struct s_thread_args {
     char alg[15];
 };
 
-static void * generate_burst(void * _arg) {
+void * generate_burst(void * _arg) {
 	/* Generate a sequence of cpu bursts one by by
 		and add them to rq.
 
@@ -206,7 +214,6 @@ static void * generate_burst(void * _arg) {
             }
 
             struct runqueue_elem *burst;
-            /*	buf = (struct shared_buffer *) malloc(sizeof(struct shared_buffer));*/
             burst = (struct runqueue_elem *) malloc(sizeof(struct runqueue_elem));
 
             burst->thread_index = index;
@@ -217,16 +224,8 @@ static void * generate_burst(void * _arg) {
             /* Try adding the burst into the runqueue */
             shared_buffer_add(buf, burst);
 
-            struct timeval end;
-
-            gettimeofday(&end, NULL);
-
-            long seconds = (end.tv_sec - start.tv_sec);
-
-            long micros = ((seconds * 1000000) + end.tv_usec) - (start.tv_usec);
-
             printf("Thread index:%d, has added burst #%d, length=%f "
-                    "At time: %ld\n", index, i + 1, burst->length, micros / 1000);
+                    "At time: %ld\n", index, i + 1, burst->length, burst -> arrival_time);
 
             /* Sleep again before creating the other burst */
             double after_burst = (double) 1 / (double) avgA;
@@ -251,19 +250,20 @@ static void * generate_burst(void * _arg) {
         My_random(index); /* Different seeds for different threads */
 
         char fileName[30];
+        char new_file[40];
 
         strcpy(fileName, file_name);
 
         /* Prepare the name of the file to be read */
         strcat(fileName, "-");
-        sprintf(fileName, "%s%d", fileName, index);
-        strcat(fileName, ".txt");
-        printf("%s\n", fileName);
+        sprintf(new_file, "%s%d", fileName, index);
+        strcat(new_file, ".txt");
+        printf("%s\n", new_file);
 
         // Open the file
-        fp = fopen(fileName, "r");
+        fp = fopen(new_file, "r");
         if ( fp == NULL ) {
-            printf("Could not be opened file %s\n", fileName);
+            printf("Could not be opened file %s\n", new_file);
             exit(1);
         }
 
@@ -275,13 +275,14 @@ static void * generate_burst(void * _arg) {
             }
         }
 
+        burst_count--;
         fclose(fp);
 
-        fopen(fileName, "r");
+        fp = fopen(new_file, "r");
 
         if ( fp == NULL ) {
-            printf("Could not be opened file %s\n", fileName);
-            return;
+            printf("Could not be opened file %s\n", new_file);
+            exit(1);
         }
 
         double sleeping_length;
@@ -313,29 +314,19 @@ static void * generate_burst(void * _arg) {
 
             /* Try adding the burst into the runqueue */
             shared_buffer_add(buf, burst);
-
-            /* */
-            printf("Thread index:%d, has added burst #%d, length=%f\n", index, i, burst->length);
+            printf("Thread index:%d, has added burst #%d, length=%f, at time: %ld\n", index, i, burst->length, burst->arrival_time);
+            printf("Thread index:%d, after adding, sleeping for %f\n", index, arrival_time);
 
             /* Sleep again before creating the other burst */
-
             usleep(arrival_time * 1000);
         }
-
-
         fclose(fp);
         free(th_args);
-
-
     }
-
-
-
-
 	pthread_exit(NULL);
 }
 
-static void * s_thread_func(void * arg) {
+void * s_thread_func(void * arg) {
 
     printf("S-THREAD Created.\n");
 
@@ -363,17 +354,28 @@ static void * s_thread_func(void * arg) {
 
             struct timeval end;
             gettimeofday(&end, NULL);
-
             long seconds = (end.tv_sec - start.tv_sec);
             long micros = ((seconds * 1000000) + end.tv_usec) - (start.tv_usec);
 
-            printf("S Thread is executing the burst of thread #%d, at time: %ld. It will sleep for %f ms\n", elem->thread_index, micros / 1000 , elem->length);
-
+            elem->exe_start_time = micros / 1000;
+            printf("S Thread is executing the burst of thread #%d, at time: %ld. It will sleep for %f ms\n", elem->thread_index, elem->exe_start_time, elem->length);
             usleep( elem -> length * 1000);
 
             printf("S Thread has executed the burst %d of thread #%d.\n", elem->burst_index, elem -> thread_index);
 
             executed_burst_count++;
+
+            struct runqueue_elem *new_elem;
+            new_elem = (struct runqueue_elem *) malloc(sizeof(struct runqueue_elem));
+
+            new_elem->arrival_time=elem->arrival_time;
+            new_elem->exe_start_time=elem->exe_start_time;
+            new_elem->burst_index=elem->burst_index;
+            new_elem->thread_index=elem->thread_index;
+            new_elem->next = NULL;
+
+            runqueue_insert(waiting_times, new_elem);
+
             free(elem);
         } while(executed_burst_count < total_burst_count );
     } else if (strcmp(algorithm, "SJF") == 0) {
@@ -417,19 +419,30 @@ static void * s_thread_func(void * arg) {
             /* Burst having shortest length has been found found, executing. */
             struct timeval end;
             gettimeofday(&end, NULL);
-
             long seconds = (end.tv_sec - start.tv_sec);
             long micros = ((seconds * 1000000) + end.tv_usec) - (start.tv_usec);
 
+            next_burst->exe_start_time = micros / 1000;
 
             printf("S Thread is executing Thread index:%d , Burst index:%d, Length:%f, at time %ld\n", next_burst->thread_index,
-                                    next_burst->burst_index, next_burst->length, micros / 1000);
+                                    next_burst->burst_index, next_burst->length, next_burst->exe_start_time);
 
-            usleep( next_burst -> length * 1000);
+            usleep(next_burst -> length * 1000);
 
             printf("S Thread has executed Thread index:%d , Burst index:%d, Length:%f\n", next_burst->thread_index,
                                     next_burst->burst_index, next_burst->length);
 
+
+            struct runqueue_elem *new_elem;
+            new_elem = (struct runqueue_elem *) malloc(sizeof(struct runqueue_elem));
+
+            new_elem->arrival_time=next_burst->arrival_time;
+            new_elem->exe_start_time=next_burst->exe_start_time;
+            new_elem->burst_index=next_burst->burst_index;
+            new_elem->thread_index=next_burst->thread_index;
+            new_elem->next = NULL;
+
+            runqueue_insert(waiting_times, new_elem);
 
             runqueue_remove(buf -> rq, next_burst);
             executed_burst_count++;
@@ -459,20 +472,32 @@ static void * s_thread_func(void * arg) {
 
             printf("\nNext burst info: thid: %d, bid: %d\n", next_burst ->thread_index, next_burst->burst_index);
 
+            /* Burst having shortest length has been found found, executing. */
             struct timeval end;
             gettimeofday(&end, NULL);
-
             long seconds = (end.tv_sec - start.tv_sec);
             long micros = ((seconds * 1000000) + end.tv_usec) - (start.tv_usec);
 
+            next_burst->exe_start_time = micros / 1000;
+
             printf("S Thread is executing Thread index:%d , Burst index:%d, Length:%f, at time: %ld\n", next_burst->thread_index,
-                                    next_burst->burst_index, next_burst->length, micros / 1000);
+                                    next_burst->burst_index, next_burst->length, next_burst->exe_start_time);
 
             usleep( next_burst -> length * 1000);
 
             printf("S Thread has executed Thread index:%d , Burst index:%d, Length:%f\n", next_burst->thread_index,
                                     next_burst->burst_index, next_burst->length);
 
+            struct runqueue_elem *new_elem;
+            new_elem = (struct runqueue_elem *) malloc(sizeof(struct runqueue_elem));
+
+            new_elem->arrival_time=next_burst->arrival_time;
+            new_elem->exe_start_time=next_burst->exe_start_time;
+            new_elem->burst_index=next_burst->burst_index;
+            new_elem->thread_index=next_burst->thread_index;
+            new_elem->next = NULL;
+
+            runqueue_insert(waiting_times, new_elem);
 
             runqueue_remove(buf -> rq, next_burst);
             executed_burst_count++;
@@ -517,14 +542,14 @@ static void * s_thread_func(void * arg) {
 
             struct timeval end;
             gettimeofday(&end, NULL);
-
             long seconds = (end.tv_sec - start.tv_sec);
             long micros = ((seconds * 1000000) + end.tv_usec) - (start.tv_usec);
 
+            next_burst->exe_start_time = micros / 1000;
 
             printf("\nNext burst info: thid: %d, bid: %d\n", next_burst ->thread_index, next_burst->burst_index);
             printf("S Thread is executing Thread index:%d , Burst index:%d, Length:%f, At time: %ld\n", next_burst->thread_index,
-                                    next_burst->burst_index, next_burst->length, micros / 1000);
+                                    next_burst->burst_index, next_burst->length, next_burst->exe_start_time);
 
             usleep(next_burst -> length * 1000);
 
@@ -538,6 +563,17 @@ static void * s_thread_func(void * arg) {
                 printf("vruntime[%d] = %f \n", i, vruntime_info[i]);
             }
 
+            struct runqueue_elem *new_elem;
+            new_elem = (struct runqueue_elem *) malloc(sizeof(struct runqueue_elem));
+
+            new_elem->arrival_time=next_burst->arrival_time;
+            new_elem->exe_start_time=next_burst->exe_start_time;
+            new_elem->burst_index=next_burst->burst_index;
+            new_elem->thread_index=next_burst->thread_index;
+            new_elem->next = NULL;
+
+            runqueue_insert(waiting_times, new_elem);
+
             runqueue_remove(buf -> rq, next_burst);
             executed_burst_count++;
         } while (executed_burst_count < total_burst_count);
@@ -546,6 +582,8 @@ static void * s_thread_func(void * arg) {
 }
 
 int main(int argc, char* argv[]) {
+
+
     gettimeofday(&start, NULL);
 
     srand(time(NULL));
@@ -556,7 +594,6 @@ int main(int argc, char* argv[]) {
 		printf("usage: schedule <N><ALG> -f <inprefix>-i.txt\n");
 		exit(1);
 	}
-    printf("aaaa\n");
 
 	if ( argc == 8 )
         mode = 1;
@@ -568,38 +605,15 @@ int main(int argc, char* argv[]) {
     /* Construct the buffer and runqueue */
     buf = (struct shared_buffer *) malloc(sizeof(struct shared_buffer));
     buf -> rq = (struct runqueue *) malloc(sizeof(struct runqueue));
+    waiting_times = (struct runqueue *) malloc(sizeof(struct runqueue));
 
     /* Initializations */
     runqueue_init(buf -> rq);
+    runqueue_init(waiting_times);
     pthread_mutex_init(&buf -> mutex_queue, NULL);
     pthread_cond_init(&buf -> cond_hasburst, NULL);
 
     if ( mode == 1 ) {
-        /*
-        if (!(N >= 1 && N <= 10)) {
-            printf("N must be between 1 and 10\n");
-            exit(1);
-        }
-
-
-
-
-        if ( minB < 100 ) {
-            printf("minB can not be smaller than 100ms\n");
-            exit(1);
-        }
-
-
-
-
-        if ( minA < 100 ) {
-            printf("minA can not be smaller than 100ms\n");
-            exit(1);
-        }
-        */
-
-        /* TODO: Add input validation to algorithm */
-
         int avgA = atoi(argv[6]);
         int avgB = atoi(argv[4]);
         int minB = atoi(argv[3]);
@@ -614,6 +628,9 @@ int main(int argc, char* argv[]) {
                 (strcmp(algorithm, "VRUNTIME") != 0) )
         {
             printf("Algorithm must be one of the 'PRIO', 'FCFS', 'SJF', 'VRUNTIME' ");
+	    free(buf -> rq);
+            free(buf);
+            free(waiting_times);
             exit(1);
         }
 
@@ -667,10 +684,6 @@ int main(int argc, char* argv[]) {
             struct runqueue_elem *elem = runqueue_retrieve(buf->rq);
             free(elem);
         }
-
-        free(buf -> rq);
-        free(buf);
-
     } else {
 
 
@@ -699,23 +712,23 @@ int main(int argc, char* argv[]) {
         for (int i = 1; i <= N; i++) {
             FILE *fp;
             char fileName[30];
-
+            char new_file[40];
             strcpy(fileName, file_name);
 
             /* Prepare the name of the file to be read */
             strcat(fileName, "-");
-            sprintf(fileName, "%s%d", fileName, i);
-            strcat(fileName, ".txt");
-            printf("%s\n", fileName);
+            sprintf(new_file, "%s%d", fileName, i);
+            strcat(new_file, ".txt");
+            printf("%s\n", new_file);
 
             // Open the file
-            fp = fopen(fileName, "r");
+            fp = fopen(new_file, "r");
             if ( fp == NULL ) {
-                printf("Could not be opened file %s\n", fileName);
-                return;
+                printf("Could not be opened file %s\n", new_file);
+                exit(1);
             }
 
-            int burst_count = 0;
+            int burst_count = -1;
 
             for (char c = getc(fp); c != EOF; c = getc(fp) ) {
                 if ( c == '\n' ) {
@@ -727,10 +740,6 @@ int main(int argc, char* argv[]) {
 
             fclose(fp);
         }
-
-        printf("Total_burst_count: %d\n\n\n", total_burst_count);
-
-
         printf("Creating S_thread.\n");
         ret = pthread_create(&s_thread_id, NULL, s_thread_func, (void *) NULL);
         if (ret < 0) {
@@ -763,10 +772,35 @@ int main(int argc, char* argv[]) {
 
         pthread_join(s_thread_id, NULL);	/* Wait for the S_thread to terminate */
 
+	while( buf->rq->count > 0 ) {
+            printf("Queue element %d, length=%f, thread_index=%d \n", i, buf->rq->head->length, buf->rq->head->thread_index);
+            struct runqueue_elem *elem = runqueue_retrieve(buf->rq);
+            free(elem);
+        }
 
     }
 
+    double sum = 0;
+    double count = 0;
+    struct runqueue_elem *elem;
+    while(waiting_times->count != 0) {
+        elem = runqueue_retrieve(waiting_times);
 
+        printf("Thread Index: %d, Burst index: %d, Arrival Time: %ld, Exe Start time: %ld, Waiting Time: %ld\n",
+                    elem -> thread_index, elem -> burst_index, elem -> arrival_time, elem -> exe_start_time,
+                    elem->exe_start_time - elem->arrival_time
+                );
+        sum += elem->exe_start_time - elem->arrival_time;
+        count++;
+
+        free(elem);
+    }
+
+    printf("Average waiting time: %f\n", sum / count);
+
+    free(waiting_times);
+	free(buf -> rq);
+	free(buf);
 	return 0;
 }
 
