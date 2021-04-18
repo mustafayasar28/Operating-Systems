@@ -32,8 +32,6 @@ typedef struct keeping {
 
 } Keeping;
 
-
-
 //shared structurelar burda yaratılıcak
 int sbmem_init(int segmentsize)
 {
