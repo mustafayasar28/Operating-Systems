@@ -10,7 +10,7 @@ typedef struct Block_Item {
 
 typedef struct Block_List {
     int size;
-    Block_Item block_items[1024];
+    Block_Item block_items[256];
 } Block_List;
 
 //struct to be kept in freelist
@@ -31,7 +31,7 @@ typedef struct Alloc_Info
 typedef struct Alloc_Info_List
 {
     int size;
-    Alloc_Info info_list[100];
+    Alloc_Info info_list[2048];
 } Alloc_Info_List;
 
 int size;
@@ -48,7 +48,6 @@ void initialize(int sz) {
     for (int i = 0; i <= n; i++) {
         block.block_list[i].size = 0;
     }
-    printf("init n = %d, size = %d\n", n, size);
     block.block_list[n].block_items[ block.block_list[n].size ].start_addr = 0;
     block.block_list[n].block_items[ block.block_list[n].size ].finish_addr = sz - 1;
     block.block_list[n].size++;
@@ -63,8 +62,6 @@ void allocate(int sz) {
         temp.start_addr = block.block_list[n].block_items[0].start_addr;
         temp.finish_addr = block.block_list[n].block_items[0].finish_addr;
 
-        printf("block.block_list[n].size = %d\n", block.block_list[n].size);
-
         /* Remove block from free list */
         for (int k = 0; k < block.block_list[n].size - 1; k++) {
             block.block_list[n].block_items[k] = block.block_list[n].block_items[k + 1];
@@ -76,7 +73,6 @@ void allocate(int sz) {
         mp.info_list[ mp.size ].start_addr = temp.start_addr;
         mp.info_list[ mp.size ].block_size = temp.finish_addr - temp.start_addr + 1;
         mp.size++;
-        // mp[temp.start_addr] = temp.finish_addr - temp.start_addr + 1;
     }
     else
     {
@@ -86,8 +82,6 @@ void allocate(int sz) {
             if ( block.block_list[i].size != 0 )
                 break;
         }
-
-        printf("After searching i = %d, size = %d\n", i, size);
 
         if ( i == size ) {
             printf("Sorry, failed to allocate memory\n");
@@ -134,9 +128,90 @@ void allocate(int sz) {
             mp.info_list[ mp.size ].start_addr = temp.start_addr;
             mp.info_list[ mp.size ].block_size = temp.finish_addr - temp.start_addr + 1;
             mp.size++;
-            //mp[temp.start_addr] = temp.finish_addr - temp.start_addr + 1;
         }
     }
+}
+
+int deallocate(int id) {
+    int found = 0;
+    int j;
+    for (j = 0; j < mp.size; j++ ) {
+        if (mp.info_list[j].start_addr == id) {
+            found = 1;
+            break;
+        }
+    }
+
+    if (!found) {
+        printf("Invalid free request\n");
+        return -1;
+    }
+
+    int block_size = mp.info_list[j].block_size; /* mp[id] = block_size */
+    int n = ceil(log(block_size) / log(2));
+
+    int i, buddyNumber, buddyAddress;
+
+    block.block_list[n].block_items[ block.block_list[n].size ].start_addr = id;
+    block.block_list[n].block_items[ block.block_list[n].size ].finish_addr = id + (int) pow(2, n) - 1;
+    block.block_list[n].size++;
+
+    printf("Memory block from %d to %f freed\n", id, id + pow(2, n) - 1 );
+
+    buddyNumber = id / block_size;
+
+    if (buddyNumber % 2 != 0)
+        buddyAddress = id - (int) pow(2, n);
+    else
+        buddyAddress = id + (int) pow(2, n);
+
+    for (i = 0; i < block.block_list[n].size; i++) {
+        if (block.block_list[n].block_items[i].start_addr == buddyAddress) {
+            if (buddyNumber % 2 == 0)
+            {
+                block.block_list[n + 1].block_items[ block.block_list[n + 1].size ].start_addr = id;
+                block.block_list[n + 1].block_items[ block.block_list[n + 1].size ].finish_addr = id + (int) (2 * (pow(2, n) -1 ));
+                block.block_list[n + 1].size++;
+
+                printf("Coalescing of blocks starting at %d and %d was done\n", id, buddyAddress);
+            }
+            else
+            {
+                block.block_list[n + 1].block_items[ block.block_list[n + 1].size ].start_addr = buddyAddress;
+                block.block_list[n + 1].block_items[ block.block_list[n + 1].size ].finish_addr = buddyAddress +
+                        (int) (2 * (pow(2,n)));
+                block.block_list[n + 1].size++;
+
+                printf("Coalescing of blocks starting at %d and %d was done\n", buddyAddress, id);
+            }
+
+            for (int k = i; k < block.block_list[n].size - 1; k++) {
+                block.block_list[n].block_items[k] = block.block_list[n].block_items[k + 1];
+            }
+            block.block_list[n].size--;
+
+            /* Çalısmazsa direkt block.block_list[n].size-- dene*/
+            for (int k = block.block_list[n].size - 1; k < block.block_list[n].size - 1; k++) {
+                block.block_list[n].block_items[k] = block.block_list[n].block_items[k + 1];
+            }
+            block.block_list[n].size--;
+            break;
+        }
+    }
+
+    /* Remove the existence from map */
+    /* Remove whose start_addr is equal to id */
+    int m;
+    for (m = 0; m < mp.size; ++m) {
+        if (mp.info_list[m].start_addr == id)
+            break;
+    }
+
+    for (int k = m; k < mp.size - 1; k++) {
+        mp.info_list[k] = mp.info_list[k + 1];
+    }
+
+    mp.size--;
 }
 
 int main() {
@@ -144,17 +219,21 @@ int main() {
 
     initialize(128);
 
-    allocate(32);
-    allocate(13);
-    allocate(64);
-    allocate(56);
-
+    allocate(16);
+    allocate(16);
+    allocate(16);
+    allocate(16);
 
     for (int i = 0; i < mp.size; i++) {
         printf("start = %d, block size = %d\n", mp.info_list[i].start_addr, mp.info_list[i].block_size);
     }
 
-}
+    deallocate(0);
+    deallocate(9);
+    deallocate(32);
+    deallocate(16);
 
-/*
-*/
+    for (int i = 0; i < mp.size; i++) {
+        printf("start = %d, block size = %d\n", mp.info_list[i].start_addr, mp.info_list[i].block_size);
+    }
+}
