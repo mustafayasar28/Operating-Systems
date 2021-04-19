@@ -24,6 +24,7 @@ typedef struct Block
 typedef struct Alloc_Info
 {
     unsigned int start_addr;    //key
+    int allocated_size;
     int block_size;
     int process_id;
 } Alloc_Info;
@@ -50,6 +51,7 @@ void initialize(int sz) {
     }
     block.block_list[n].block_items[ block.block_list[n].size ].start_addr = 0;
     block.block_list[n].block_items[ block.block_list[n].size ].finish_addr = sz - 1;
+
     block.block_list[n].size++;
 }
 
@@ -68,10 +70,11 @@ void allocate(int sz) {
         }
         block.block_list[n].size--;
 
-        printf("Memory from %d to %d allocated\n temp.first = %d\n", temp.start_addr, temp.finish_addr, temp.start_addr);
-
         mp.info_list[ mp.size ].start_addr = temp.start_addr;
         mp.info_list[ mp.size ].block_size = temp.finish_addr - temp.start_addr + 1;
+        mp.info_list[ mp.size ].allocated_size = sz;
+        mp.info_list[ mp.size ].process_id = getpid();
+
         mp.size++;
     }
     else
@@ -123,11 +126,13 @@ void allocate(int sz) {
                 }
                 block.block_list[i].size--;
             }
-            printf("Memory from %d to %d allocated\n", temp.start_addr, temp.finish_addr);
 
             mp.info_list[ mp.size ].start_addr = temp.start_addr;
             mp.info_list[ mp.size ].block_size = temp.finish_addr - temp.start_addr + 1;
+            mp.info_list[ mp.size ].process_id = getpid();
+            mp.info_list[ mp.size ].allocated_size = sz;
             mp.size++;
+            //mp[temp.start_addr] = temp.finish_addr - temp.start_addr + 1;
         }
     }
 }
@@ -179,7 +184,7 @@ int deallocate(int id) {
             {
                 block.block_list[n + 1].block_items[ block.block_list[n + 1].size ].start_addr = buddyAddress;
                 block.block_list[n + 1].block_items[ block.block_list[n + 1].size ].finish_addr = buddyAddress +
-                        (int) (2 * (pow(2,n)));
+                                                                                                  (int) (2 * (pow(2,n)));
                 block.block_list[n + 1].size++;
 
                 printf("Coalescing of blocks starting at %d and %d was done\n", buddyAddress, id);
@@ -212,28 +217,27 @@ int deallocate(int id) {
     }
 
     mp.size--;
+
 }
 
 int main() {
     int sz = 32768;
 
-    initialize(128);
+    initialize(2048);
 
-    allocate(16);
-    allocate(16);
-    allocate(16);
-    allocate(16);
 
-    for (int i = 0; i < mp.size; i++) {
-        printf("start = %d, block size = %d\n", mp.info_list[i].start_addr, mp.info_list[i].block_size);
-    }
-
-    deallocate(0);
-    deallocate(9);
-    deallocate(32);
-    deallocate(16);
+    allocate(150);
+    allocate(260);
+    allocate(1000);
+    deallocate(563);
+    allocate(129);
+    allocate(500);
 
     for (int i = 0; i < mp.size; i++) {
-        printf("start = %d, block size = %d\n", mp.info_list[i].start_addr, mp.info_list[i].block_size);
+        printf("start = %d, block size = %d, process id = %d, allocation size = %d\n",
+               mp.info_list[i].start_addr,
+               mp.info_list[i].block_size,
+               mp.info_list[i].process_id,
+               mp.info_list[i].allocated_size);
     }
 }
