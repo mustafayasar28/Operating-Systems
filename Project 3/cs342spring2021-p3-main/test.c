@@ -193,6 +193,7 @@ int deallocate(int id) {
             for (int k = i; k < block.block_list[n].size - 1; k++) {
                 block.block_list[n].block_items[k] = block.block_list[n].block_items[k + 1];
             }
+            
             block.block_list[n].size--;
 
             /* Çalısmazsa direkt block.block_list[n].size-- dene*/
