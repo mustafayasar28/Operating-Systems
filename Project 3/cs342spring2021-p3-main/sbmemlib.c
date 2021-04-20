@@ -1,9 +1,7 @@
-/* ÖNEMLİ !! 
-
-    Lütfen RUN'larken -lrt, -lm, -pthread  en sona eklemeyi unutmayınız
-
-    gcc create_memory_sb.c sbmemlib.c -o main -lrt -pthread -lm
-
+/* 
+Authors: Mustafa Yasar, Cemre Biltekin
+Date: 21/04/2021
+Program: Shared Memory Lib
 */
 
 #include <semaphore.h>
@@ -17,33 +15,35 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 
-// Define a name for your shared memory; you can give any name that start with a slash character; it will be like a filename.
+// Define shared memory
 #define SHARED_MEM_NAME "/shared_mem_cm"
 
 // Define semaphore(s)
 #define PROCESS_COUNT_SEM_NAME "/process_count_sem"
-#define ALLOCATION_SEM "/sem_open_allocation_sem"
 #define KEEPING_SEM "/keeping_sem"
 
 // Define your structures and variables.
+
+// Stores free block's start and finish address
 typedef struct Block_Item {
     int start_addr;
     int finish_addr;
 } Block_Item;
 
+// Stores blocks of an order
 typedef struct Block_List {
     int size;
     Block_Item block_items[256];
 } Block_List;
 
-//struct to be kept in freelist
+// This serves as a freelist of blocks of orders
 typedef struct Block
 {
     int size;
     Block_List block_list[32];
 } Block;
 
-//struct for allocation info
+// Stores allocated block's info
 typedef struct Alloc_Info
 {
     unsigned int start_addr;    //key
@@ -52,17 +52,22 @@ typedef struct Alloc_Info
     int process_id;
 } Alloc_Info;
 
+/* Allocation info list to contain all allocation info */
 typedef struct Alloc_Info_List
 {
     int size;
     Alloc_Info info_list[2048];
 } Alloc_Info_List;
 
+// Stores processes' base addresses to shared mem
 typedef struct SegmentBase_Table {
     int process_id;
     void *segmentbase;
 } SegmentBase_Table;
 
+/* Bookkeeping struct to store every information to implement buddy allocation 
+    algorithm. 
+*/
 typedef struct keeping {
     int segment_size;
     int process_count;
@@ -73,13 +78,11 @@ typedef struct keeping {
     
     int segmentbase_table_size;
     SegmentBase_Table segmentbase_table[10];
-
-    sem_t * pc_sem;
-    sem_t * alloc_sem;
-    sem_t * keeping_sem;
 } Keeping;
 
-// Shared structurelar burda yaratılacak
+/*
+    Creates and initializes a shared memory segment of the given size.
+*/
 int sbmem_init(int segmentsize)
 {
     if ( ((segmentsize != 0) && ((segmentsize & (segmentsize -1)) == 0)) == 0 ) {
@@ -99,19 +102,18 @@ int sbmem_init(int segmentsize)
     // Shared segment fail
     if ( ftruncate(fd, segmentsize + sizeof(Keeping)) == -1 ) return -1;
 
-    //put size info to beginning
+    /* Put keeping info to beginning */
     Keeping *sizeptr = mmap(0, sizeof(Keeping), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 
-	printf("Size of keeping: %ld\n", sizeof(Keeping));
-
     /* Initialize the semaphore(s) */
-    sizeptr -> pc_sem = sem_open(PROCESS_COUNT_SEM_NAME, O_CREAT, 0644, 1);
-    sizeptr -> alloc_sem = sem_open(ALLOCATION_SEM, O_CREAT, 0644, 1);
-    sizeptr -> keeping_sem = sem_open(KEEPING_SEM, O_CREAT, 0644, 1);
+    sem_t * pc_sem = sem_open(PROCESS_COUNT_SEM_NAME, O_CREAT, 0644, 1);
+    sem_t * keeping_sem = sem_open(KEEPING_SEM, O_CREAT, 0644, 1);
 
+    // Initialize process count and segment size given
     sizeptr -> process_count = 0;
     sizeptr -> segment_size = segmentsize;
     
+    // Find order
     int n = ceil( log(segmentsize) / log(2) );
     sizeptr -> size = n + 1;
     (sizeptr -> mp).size = 0;
@@ -119,6 +121,7 @@ int sbmem_init(int segmentsize)
     for(int i = 0; i <= n; i++) 
         (sizeptr -> block).block_list[i].size = 0;
 
+    // Initialize the first block in total segment size
     (sizeptr -> block).block_list[n].block_items[ (sizeptr -> block).block_list[n].size ].start_addr = 0;
     (sizeptr -> block).block_list[n].block_items[ (sizeptr -> block).block_list[n].size ].finish_addr = segmentsize - 1;
     (sizeptr -> block).block_list[n].size++;
@@ -126,92 +129,103 @@ int sbmem_init(int segmentsize)
     return (0);
 }
 
-// semaphorelar burda kapatılıcak
+/* Removes the shared memory segment from the system */
 int sbmem_remove()
 {
-    int fd = shm_open(SHARED_MEM_NAME, O_RDWR, S_IRUSR | S_IWUSR);
-    Keeping *segment_ptr = mmap(0, sizeof(Keeping), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-   
-    //pc_sem = sem_open(PROCESS_COUNT_SEM_NAME, 0);
-    //alloc = sem_open(ALLOCATION_SEM, 0);
-    //keeping_sem = sem_open(KEEPING_SEM, 0);
+    /* Close & Unlink the semaphores */
+    sem_t *pc_sem = sem_open(PROCESS_COUNT_SEM_NAME, 0);
+    sem_t *keeping_sem = sem_open(KEEPING_SEM, 0);
     
-    //close & unlink semaphores
+    sem_close(pc_sem);
+    sem_close(keeping_sem);
+
     sem_unlink(PROCESS_COUNT_SEM_NAME);
-    sem_unlink(ALLOCATION_SEM);
     sem_unlink(KEEPING_SEM);
 
-    sem_close(segment_ptr->pc_sem);
-    sem_close(segment_ptr->alloc_sem);
-    sem_close(segment_ptr->keeping_sem);
-    
+    // Unlink shared memory
     return shm_unlink(SHARED_MEM_NAME); 
 }
 
-// ne kadar process bekliyo bilebilmeliler
+/* Indicates that the requesting process can or cannot use the shared memory segment */
 int sbmem_open()
 {
-    //sem_t *pc_sem = sem_open(PROCESS_COUNT_SEM_NAME, 0);
-    //sem_t *keeping_sem = sem_open(KEEPING_SEM, 0);
-    
+    /* Connect to the semaphores */
+    sem_t * pc_sem;
+    sem_t * keeping_sem;
+    pc_sem = sem_open(PROCESS_COUNT_SEM_NAME, 0);
+
+    // Semaphore connection failed
+    if(pc_sem == SEM_FAILED){
+        exit(1);
+    }
+
+    // Semaphore connection failed
+    keeping_sem = sem_open(KEEPING_SEM, 0);
+    if(keeping_sem == SEM_FAILED){
+        exit(1);
+    };
+
+    /* File descriptor for the shared memory */
     int fd = shm_open(SHARED_MEM_NAME, O_RDWR, S_IRUSR | S_IWUSR);
+    
+    // Wait for access to shared memory
+    sem_wait(keeping_sem);
 
-    //access keeping info to read segment size
+    /* Access keeping info to read segment size */
     Keeping *segment_ptr = mmap(0, sizeof(Keeping), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    sem_wait(segment_ptr->keeping_sem);
 
-    //segment_ptr -> pc_sem = sem_open(PROCESS_COUNT_SEM_NAME, 0);
-    //segment_ptr -> keeping_sem = sem_open(KEEPING_SEM, 0);
+    sem_wait(pc_sem);
 
-    sem_wait(segment_ptr -> pc_sem);
+    /* If there are more than 10 processes currently using the shared memory,
+        return -1, so the process will not use the shared segment. 
+     */
     if (segment_ptr -> process_count >= 10) 
         return -1;
     
+    /* Increase the number of processes using the shared memory */
     segment_ptr -> process_count++;
-    sem_post(segment_ptr -> pc_sem);
+    sem_post(pc_sem);
 
-    //get segment size from keeping
+    // Get segment size from keeping
     int segmentsize = segment_ptr -> segment_size;
-    //mmap again just to include allocatable segment sized memory, so keeping is hidden from process
+    
+    // mmap again correctly now it has the segmentsize
     void *segmentbase = mmap(0, sizeof(Keeping) + segmentsize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     
-    //save base address to keeping for the caller process
-
-    /* segment_ptr->savesegmentbase = segmentbase; */
+    // Save base address to keeping for the caller process
     segment_ptr -> segmentbase_table[ segment_ptr -> segmentbase_table_size ].process_id = getpid();
     segment_ptr -> segmentbase_table[ segment_ptr -> segmentbase_table_size ].segmentbase = segmentbase;
     segment_ptr -> segmentbase_table_size++;
     
-    sem_post(segment_ptr -> keeping_sem); 
+    sem_post(keeping_sem); 
     return 0;
 }
 
+/* Allocates memory of size n and returns the pointer to the allocated space */
 void *sbmem_alloc (int size)
 {
-    //sem_t *keeping_sem = sem_open(KEEPING_SEM, 0);
+    sem_t *keeping_sem = sem_open(KEEPING_SEM, 0);
     
-
-    /* sz = size */
     int n = ceil( log(size) / log(2) );
 
+    /* File descriptor to the shared memory */
     int fd = shm_open(SHARED_MEM_NAME, O_RDWR, S_IRUSR | S_IWUSR);
     
-    //keeping_ptr holds to base of keeping info
-    Keeping *keeping_ptr = mmap(0, sizeof(Keeping), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    sem_wait(keeping_sem);
+    Keeping *keeping_ptr = mmap(0, sizeof(Keeping), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);     // keeping_ptr holds to base of keeping info
     
-    sem_wait(keeping_ptr -> keeping_sem);
-    
-
-    //find segmentbase address of a process from table with its pid and hide keeping from memory
-    /* void *segmentbase = (keeping_ptr->savesegmentbase) + sizeof(Keeping); */
+    // Find segmentbase address of a process from table with its pid and hide keeping from memory manipulation
     int pid = getpid();
-    void* segmentbase;
+    void *segmentbase;
+
+    /* Get the normalized segmentbase address of the process */
     for (int i = 0; i < (keeping_ptr -> segmentbase_table_size); i++) {
         if ( (keeping_ptr -> segmentbase_table)[i].process_id == pid ) {
             segmentbase = (keeping_ptr -> segmentbase_table[i]).segmentbase + sizeof(Keeping);
         }
     }
 
+    /* Buddy Allocation algorithm */
     if ((keeping_ptr->block).block_list[n].size > 0) {
         Block_Item temp;
         temp.start_addr = (keeping_ptr -> block).block_list[n].block_items[0].start_addr;
@@ -238,8 +252,7 @@ void *sbmem_alloc (int size)
                 			printf("\n");
 			}
 		
-		
-        sem_post(keeping_ptr -> keeping_sem);
+        sem_post(keeping_sem);
         return temp.start_addr + segmentbase;
     }
     else
@@ -253,7 +266,7 @@ void *sbmem_alloc (int size)
 
         if (i == keeping_ptr -> size) {
             printf("Can not allocate\n");
-            sem_post(keeping_ptr -> keeping_sem);
+            sem_post(keeping_sem);
             return NULL;
         } else {
             Block_Item temp;
@@ -310,7 +323,7 @@ void *sbmem_alloc (int size)
                 			printf("\n");
 			}
 
-            sem_post(keeping_ptr -> keeping_sem);
+            sem_post(keeping_sem);
             
             return temp.start_addr + segmentbase;
         }
@@ -319,20 +332,19 @@ void *sbmem_alloc (int size)
 
 void sbmem_free (void *p)
 {
-    //get semaphores
-    //sem_t *keeping_sem = sem_open(KEEPING_SEM, 0);
+    // Get semaphore
+    sem_t *keeping_sem = sem_open(KEEPING_SEM, 0);
 
     int fd = shm_open(SHARED_MEM_NAME, O_RDWR, S_IRUSR | S_IWUSR);
     
-    //keeping_ptr holds to base of keeping info
+    sem_wait(keeping_sem);
+
+    // keeping_ptr holds to base of keeping info
     Keeping *keeping_ptr = mmap(0, sizeof(Keeping), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     
-    sem_wait(keeping_ptr -> keeping_sem);
-
-    //segmentbase points to allocatable segment sized memory
-    /* void *segmentbase = (keeping_ptr->savesegmentbase) + sizeof(Keeping); */
-
-    //find the process' start address to segment from keeping
+    /* Segmentbase points to allocatable segment sized memory
+        find the process' start address to segment from keeping
+    */
     int pid = getpid();
     void* segmentbase;
     for (int i = 0; i < (keeping_ptr -> segmentbase_table_size); i++) {
@@ -341,7 +353,7 @@ void sbmem_free (void *p)
         }
     }
 
-    //check validity of dealloc request
+    // Check validity of the deallocation request
     int id = p - segmentbase;
     printf("id = %d\n", id);
     int found = 0;
@@ -354,12 +366,14 @@ void sbmem_free (void *p)
         }
     }
 
+    /* The request is invalid */
     if(!found){
         printf("Invalid free request.\n");
         return;
     }
 
-    //request is valid
+    /* The request is valid */
+    /* Start buddy algorithm for deallocation */
     int block_size = (keeping_ptr->mp).info_list[j].block_size;
     int n = ceil(log(block_size) / log(2));
 
@@ -408,7 +422,6 @@ void sbmem_free (void *p)
 
             (keeping_ptr->block).block_list[n].size--;
 
-            /* Çalısmazsa direkt block.block_list[n].size-- dene*/
             for (int k = (keeping_ptr->block).block_list[n].size - 1; k < (keeping_ptr->block).block_list[n].size - 1; k++) {
                 (keeping_ptr->block).block_list[n].block_items[k] = (keeping_ptr->block).block_list[n].block_items[k + 1];
             }
@@ -430,23 +443,23 @@ void sbmem_free (void *p)
     }
 
     (keeping_ptr->mp).size--;
-    sem_post(keeping_ptr -> keeping_sem);
+    sem_post(keeping_sem);
 }
 
 int sbmem_close()
 {
-    //sem_t *pc_sem = sem_open(PROCESS_COUNT_SEM_NAME, 0);
-    //sem_t *keeping_sem = sem_open(KEEPING_SEM, 0);
+    sem_t *pc_sem = sem_open(PROCESS_COUNT_SEM_NAME, 0);
+    sem_t *keeping_sem = sem_open(KEEPING_SEM, 0);
 
     int fd = shm_open(SHARED_MEM_NAME, O_RDWR, S_IRUSR | S_IWUSR);
     
-    //keeping_ptr holds to base of keeping info
+    // keeping_ptr holds to base of keeping info
+    sem_wait(keeping_sem);
     Keeping *keeping_ptr = mmap(0, sizeof(Keeping), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    sem_wait(keeping_ptr -> keeping_sem);
     keeping_ptr -> process_count--;
     int segmentsize = keeping_ptr->segment_size;
     
-    //remove process info from segmentbase table as it will not use it anymore)
+    // Remove process info from segmentbase table as it will not use it anymore)
     int index = -1;
     int pid = getpid();
     for (int i = 0; i < keeping_ptr ->segmentbase_table_size; i++) {
@@ -469,14 +482,13 @@ int sbmem_close()
 
     (keeping_ptr -> segmentbase_table_size)--;
 
-    //decrease process count
-    sem_wait(keeping_ptr -> pc_sem);
+    // Decrease process count
+    sem_wait(pc_sem);
     keeping_ptr -> process_count--;
-    sem_post(keeping_ptr -> pc_sem);
+    sem_post(pc_sem);
 
-    //unmap from virtual address space
+    // Unmap from virtual address space
     int succ = munmap(segmentbase, sizeof(Keeping) + segmentsize);
-    sem_post(keeping_ptr -> keeping_sem);
-
+    sem_post(keeping_sem);
     return (succ); 
 }
