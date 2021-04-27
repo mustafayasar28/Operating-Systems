@@ -86,7 +86,7 @@ typedef struct keeping {
 int sbmem_init(int segmentsize)
 {
     if ( ((segmentsize != 0) && ((segmentsize & (segmentsize -1)) == 0)) == 0 ) {
-        perror("The segment size is not a power of 2\n");
+        printf("The segment size is not a power of 2\n");
         exit(1);
     }
 
@@ -108,6 +108,16 @@ int sbmem_init(int segmentsize)
     /* Initialize the semaphore(s) */
     sem_t * pc_sem = sem_open(PROCESS_COUNT_SEM_NAME, O_CREAT, 0644, 1);
     sem_t * keeping_sem = sem_open(KEEPING_SEM, O_CREAT, 0644, 1);
+
+    // Semaphore connection failed
+    if(pc_sem == SEM_FAILED){
+        exit(1);
+    }
+
+    // Semaphore connection failed
+    if(keeping_sem == SEM_FAILED){
+        exit(1);
+    }
 
     // Initialize process count and segment size given
     sizeptr -> process_count = 0;
@@ -243,6 +253,7 @@ void *sbmem_alloc (int size)
 
         (keeping_ptr -> mp).size++;
 		
+        	/*
 		printf("MAP STATUS:\n");
 			for (int i = 0; i < (keeping_ptr -> mp).size; i++) {
                 printf("Allocated size = %d\n", keeping_ptr -> mp.info_list[i].allocated_size);
@@ -251,7 +262,7 @@ void *sbmem_alloc (int size)
                 printf("Start address = %d\n", keeping_ptr -> mp.info_list[i].start_addr);
                 			printf("\n");
 			}
-		
+		*/
         sem_post(keeping_sem);
         return temp.start_addr + segmentbase;
     }
@@ -313,7 +324,7 @@ void *sbmem_alloc (int size)
 
             (keeping_ptr->mp).size++;
 
-			
+			/*
 			printf("MAP STATUS:\n");
 			for (int i = 0; i < (keeping_ptr -> mp).size; i++) {
                 printf("Allocated size = %d\n", keeping_ptr -> mp.info_list[i].allocated_size);
@@ -322,6 +333,7 @@ void *sbmem_alloc (int size)
                 printf("Start address = %d\n", keeping_ptr -> mp.info_list[i].start_addr);
                 			printf("\n");
 			}
+            */
 
             sem_post(keeping_sem);
             
@@ -355,7 +367,6 @@ void sbmem_free (void *p)
 
     // Check validity of the deallocation request
     int id = p - segmentbase;
-    printf("id = %d\n", id);
     int found = 0;
     int j;
 
@@ -383,7 +394,6 @@ void sbmem_free (void *p)
     (keeping_ptr->block).block_list[n].block_items[ (keeping_ptr->block).block_list[n].size ].finish_addr = id + (int) pow(2, n) - 1;
     (keeping_ptr->block).block_list[n].size++;
 
-    printf("Memory block from %d to %f freed\n", id, id + pow(2, n) - 1 );
 
     buddyNumber = id / block_size;
 
@@ -392,11 +402,8 @@ void sbmem_free (void *p)
     else
         buddyAddress = id + (int) pow(2, n);
 
-    printf("buddyNumber = %d, buddyAddress = %d\n", buddyNumber, buddyAddress);
-
 
     for (i = 0; i < (keeping_ptr->block).block_list[n].size; i++) {
-        printf("start_addr = %d\n", (keeping_ptr->block).block_list[n].block_items[i].start_addr);
 
         if ((keeping_ptr->block).block_list[n].block_items[i].start_addr == buddyAddress) {
             if (buddyNumber % 2 == 0)
@@ -404,16 +411,12 @@ void sbmem_free (void *p)
                 (keeping_ptr->block).block_list[n + 1].block_items[ (keeping_ptr->block).block_list[n + 1].size ].start_addr = id;
                 (keeping_ptr->block).block_list[n + 1].block_items[ (keeping_ptr->block).block_list[n + 1].size ].finish_addr = id + (int) (2 * (pow(2, n) -1 ));
                 (keeping_ptr->block).block_list[n + 1].size++;
-
-                printf("Coalescing of blocks starting at %d and %d was done\n", id, buddyAddress);
             }
             else
             {
                 (keeping_ptr->block).block_list[n + 1].block_items[ (keeping_ptr->block).block_list[n + 1].size ].start_addr = buddyAddress;
                 (keeping_ptr->block).block_list[n + 1].block_items[ (keeping_ptr->block).block_list[n + 1].size ].finish_addr = buddyAddress + (int) (2 * (pow(2,n)));
                 (keeping_ptr->block).block_list[n + 1].size++;
-
-                printf("Coalescing of blocks starting at %d and %d was done\n", buddyAddress, id);
             }
 
             for (int k = i; k < (keeping_ptr->block).block_list[n].size - 1; k++) {
@@ -442,6 +445,7 @@ void sbmem_free (void *p)
         (keeping_ptr->mp).info_list[k] = (keeping_ptr->mp).info_list[k + 1];
     }
 
+    // Delete it from alloc info
     (keeping_ptr->mp).size--;
     sem_post(keeping_sem);
 }
@@ -459,7 +463,7 @@ int sbmem_close()
     keeping_ptr -> process_count--;
     int segmentsize = keeping_ptr->segment_size;
     
-    // Remove process info from segmentbase table as it will not use it anymore)
+    // Remove process info from segmentbase table as it will not use it anymore
     int index = -1;
     int pid = getpid();
     for (int i = 0; i < keeping_ptr ->segmentbase_table_size; i++) {
@@ -492,3 +496,4 @@ int sbmem_close()
     sem_post(keeping_sem);
     return (succ); 
 }
+

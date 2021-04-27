@@ -16,3 +16,4 @@ destroy_memory_sb: destroy_memory_sb.c
 
 clean: 
 	rm -fr *.o *.a *~ a.out  app sbmemlib.o sbmemlib.a libsbmemlib.a  create_memory_sb destroy_memory_sb
+
